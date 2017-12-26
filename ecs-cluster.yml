@@ -1,0 +1,84 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Parameters:
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the ECS instances.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Select a VPC that allows instances access to the Internet.
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Select at least two subnets in your selected VPC.
+Resources:
+  EcsCluster:
+    Type: AWS::ECS::Cluster
+  EcsAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier: !Ref "SubnetIds"
+      LaunchConfigurationName: !Ref "EcsLaunchConfiguration"
+      MinSize: "1"
+      MaxSize: "1"
+      DesiredCapacity: "1"
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT10M
+    UpdatePolicy:
+      AutoScalingReplacingUpdate:
+        WillReplace: "true"
+  EcsLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: "ami-14b55f76"
+      SecurityGroups: [!Ref "Ec2InstanceSecurityGroup"]
+      InstanceType: "t2.micro"
+      IamInstanceProfile: !Ref "Ec2InstanceProfile"
+      KeyName: !Ref "KeyName"
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          echo ECS_CLUSTER=${EcsCluster} >> /etc/ecs/ecs.config
+          yum install -y aws-cfn-bootstrap
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource EcsAutoScalingGroup --region ${AWS::Region}
+  Ec2InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http access to ECS instances
+      VpcId: !Ref "VpcId"
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: '80'
+        ToPort: '80'
+        CidrIp: 0.0.0.0/0
+  Ec2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref "Ec2Role"
+  Ec2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action:
+            - "sts:AssumeRole"
+          Effect: Allow
+          Principal:
+            Service:
+              - "ec2.amazonaws.com"
+      Policies:
+      - PolicyName: "ecs-service"
+        PolicyDocument:
+          Statement:
+          - Action:
+              - "ecs:CreateCluster"
+              - "ecs:DeregisterContainerInstance"
+              - "ecs:DiscoverPollEndpoint"
+              - "ecs:Poll"
+              - "ecs:RegisterContainerInstance"
+              - "ecs:StartTelemetrySession"
+              - "ecs:Submit*"
+              - "logs:CreateLogStream"
+              - "logs:PutLogEvents"
+            Effect: Allow
+            Resource: "*"
